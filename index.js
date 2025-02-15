@@ -9,6 +9,8 @@ const POINTS_API = "https://ceremony-backend.silentprotocol.org/users/points";
 const POSITION_API = "https://ceremony-backend.silentprotocol.org/ceremony/position";
 
 const userTokens = {};
+const autoNotificationIntervals = {};
+const notificationSettings = {};
 
 const logFilePath = path.join(__dirname, "bot.log");
 
@@ -21,6 +23,64 @@ function logUser(username) {
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
+async function sendPositionNotification(chatId) {
+    if (!userTokens[chatId]) {
+        bot.sendMessage(chatId, "⚠️ You haven't set your token yet! Use /settoken YOUR_BEARER_TOKEN.");
+        return;
+    }
+
+    try {
+        const response = await axios.get(POSITION_API, {
+            headers: { Authorization: `Bearer ${userTokens[chatId]}` }
+        });
+
+        const { behind, timeRemaining } = response.data;
+
+        const message = `*Your Queue Position* 📍\n\n` +
+            `📉 *Users Behind You:* ${behind}\n` +
+            `⏳ *Estimated Time Left:* ${timeRemaining}\n\n` +
+            "Use /position to check again!\n\n" +
+            "📢 Join Our Channel: [Happy Cuan Airdrop](https://t.me/HappyCuanAirdrop)";
+        
+        bot.sendMessage(chatId, message, { parse_mode: "Markdown" });
+
+        if (behind < 100 && notificationSettings[chatId]?.intervalTime !== 30 * 60 * 1000) {
+            startAutoNotification(chatId, 30 * 60 * 1000);
+            bot.sendMessage(chatId, "🚨 *Warning!* Your queue position is below 100! Notifications will now be sent every 30 minutes.", { parse_mode: "Markdown" });
+        }
+    } catch (error) {
+        bot.sendMessage(
+            chatId,
+            "❌ *Failed to fetch your position!*\n\n" +
+            "🚨 Your token might be expired. Please update it using:\n" +
+            "/settoken NEW_BEARER_TOKEN.",
+            { parse_mode: "Markdown" }
+        );
+
+        delete userTokens[chatId];
+    }
+}
+
+function startAutoNotification(chatId, intervalTime) {
+    if (autoNotificationIntervals[chatId]) {
+        clearInterval(autoNotificationIntervals[chatId]);
+    }
+
+    autoNotificationIntervals[chatId] = setInterval(() => {
+        sendPositionNotification(chatId);
+    }, intervalTime);
+
+    notificationSettings[chatId] = { active: true, intervalTime };
+}
+
+function stopAutoNotification(chatId) {
+    if (autoNotificationIntervals[chatId]) {
+        clearInterval(autoNotificationIntervals[chatId]);
+        delete autoNotificationIntervals[chatId];
+        delete notificationSettings[chatId];
+    }
+}
+
 bot.onText(/\/start/, (msg) => {
     const username = msg.from.username || "Unknown";
     logUser(username);
@@ -32,6 +92,10 @@ bot.onText(/\/start/, (msg) => {
         "/settoken YOUR-BEARER-TOKEN \n\n" +
         "Then, check your points with /checkpoints.\n" +
         "You can also check your queue position with /position.\n\n" +
+        "🔔 *Auto-Notification Commands:*\n" +
+        "/autonotif - Activate auto-notification (every 1 hour).\n" +
+        "/stopnotif - Deactivate auto-notification.\n" +
+        "/notifstatus - Check auto-notification status.\n\n" +
         "☘️ Developed By HCA",
         { parse_mode: "Markdown" }
     );
@@ -119,6 +183,37 @@ bot.onText(/\/position/, async (msg) => {
         );
 
         delete userTokens[chatId];
+    }
+});
+
+bot.onText(/\/autonotif/, (msg) => {
+    const chatId = msg.chat.id;
+    const username = msg.from.username || "Unknown";
+    logUser(username);
+
+    startAutoNotification(chatId, 5 * 60 * 1000);
+    bot.sendMessage(chatId, "✅ Auto-notification activated! You will receive position updates every hour.");
+});
+
+bot.onText(/\/stopnotif/, (msg) => {
+    const chatId = msg.chat.id;
+    const username = msg.from.username || "Unknown";
+    logUser(username);
+
+    stopAutoNotification(chatId);
+    bot.sendMessage(chatId, "❌ Auto-notification deactivated!");
+});
+
+bot.onText(/\/notifstatus/, (msg) => {
+    const chatId = msg.chat.id;
+    const username = msg.from.username || "Unknown";
+    logUser(username);
+
+    const settings = notificationSettings[chatId];
+    if (settings && settings.active) {
+        bot.sendMessage(chatId, `🔔 Auto-notification is active. Updates every ${settings.intervalTime / 60000} minutes.`);
+    } else {
+        bot.sendMessage(chatId, "🔕 Auto-notification is inactive.");
     }
 });
 
